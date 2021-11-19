@@ -2,6 +2,7 @@
 
 ## Uma integração do WooCommerce com API Digital Banks
 
+![Generic badge](https://img.shields.io/badge/Em-Desenvolvimento-<COLOR>.svg)
 
 ###### Configuração do GateWay
 
