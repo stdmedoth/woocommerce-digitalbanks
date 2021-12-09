@@ -1,6 +1,6 @@
 # Pagamento com Digital Banks
 
-## Uma integração do WooCommerce com API Digital Banks
+## Uma integração do WooCommerce com API Digital Banks (Boleto)
 
 
 ###### Configuração do GateWay

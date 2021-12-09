@@ -2,6 +2,7 @@
 
 namespace WC_DigitalBanks;
 use WP_REST_Server;
+use WC_Order;
 
 class Boleto_API{
 
@@ -16,11 +17,11 @@ class Boleto_API{
 
 	public function register_routes() {
 	    // register_rest_route() handles more arguments but we are going to stick to the basics for now.
-	    register_rest_route( 'wc-digitalbanks-boleto/v1', 'get_boleto/', array(
+	    register_rest_route( 'wc-digitalbanks-boleto/v1', 'clientWebhook/', array(
 	        // By using this constant we ensure that when the WP_REST_Server changes our readable endpoints will work as intended.
-	        'methods'  => WP_REST_Server::READABLE,
+	        'methods'  => WP_REST_Server::CREATABLE,
 	        // Here we register our callback. The callback is fired when this endpoint is matched by the WP_REST_Server class.
-	        'callback' => [$this, 'get_boleto'],
+	        'callback' => [$this, 'clientWebhook'],
 	        // Here we register our permissions callback. The callback is fired before the main callback to check if the current user can access the endpoint.
 	        'permission_callback' => [$this, 'api_permission_called'],
 	    ) );
@@ -29,60 +30,82 @@ class Boleto_API{
 	}
 
 
-	public function get_boleto( $request ){
+	public function clientWebhook( $request ){
+		$params = (Object) $request->get_params();
 
-		$order_id = $request->get_param('order_id');
-		$curl = curl_init();
+		/*
+			1 PROCESSED - Processed by the system, issued at Bank
+			2 LIQUIDATED - Client payed
+			3 EXPIRED_LIQUIDATED - Client payed after due date
+			4 LIQUIDATED_AFTER_CANCEL - Invoice was cancelled by assignor/owner but client payed it anyway
+			5 EXPIRED / DATE_EXPIRED - Invoice expired and not paid yet
+			6 ASSIGNOR_CANCELLED - Invoice was cancelled by assignor/owner
+			7 BANK_CANCELLED - Invoice was cancelled by bank
+		*/
+		global $wpdb;
+		$invoice_table_name = $wpdb->prefix . "wc_digitalbanks_invoices";
+		switch($params->status){
+			case 1:
+				$invoice = $wpdb->get_row("SELECT * FROM {$invoice_table_name} WHERE invoice_id = '{$params->id}'");
+				if(!$invoice){
+					return [
+						'status' => 'error',
+						'message' => "Não foi possível encontrar o pedido para o invoice " . $invoice->id
+					];
+				}
 
-		$params = [];
-		$params['value'] = $order->get_total();
-		$params['payerTaxId'] = '000.000.000-00';
-		$params['payerPostalCode'] = '00000-000';
-		$params['payerLocationNumber'] = '0';
-		$params['payerComplement'] = NULL;
-		$params['clientWebhook'] = NULL;
-		$params['customIssuerName'] = 'PADARIA%20DO%20JOAO';
-		$params['customBodyText'] = 'Referente ao pedido ABC0000001234';
-		$params['discountType'] = 3;
-		$params['discountLimitDate'] = '2019-08-09';
-		$params['discountPercentAmount'] = '0';
-		$params['discountAmount'] = 0.10;
-		$params['discountFixedAmount'] = 0.25;
-		$params['interestType'] = 1;
-		$params['interestPercent'] = 0;
-		$params['interestAmount'] = 2;
-		$params['fineType'] = 2;
-		$params['finePercent'] = 3.10;
-		$params['fineAmount'] = 0;
-		$params['fineDate'] = '2019-08-09';
+				$order = new WC_Order($invoice->wc_order);
+				if($order){
+					$order->update_status( 'wc-processing', 'Pedido em processamento identificado pelo webhook DigitalBanks');
+				}
+				return [
+					'status' => 'ok',
+					'message' => "Informação recebida"
+				];
+				break;
+			case 2:
+			case 3:
+				$invoice = $wpdb->get_row("SELECT * FROM {$invoice_table_name} WHERE invoice_id = '{$params->id}'");
+				if(!$invoice){
+					return [
+						'status' => 'error',
+						'message' => "Não foi possível encontrar o pedido para o invoice " . $invoice->id
+					];
+				}
 
-		$post_arr = [];
-		foreach ($params as $key => $value) {
-			$post_arr[] = "$key=$value";
+				$order = new WC_Order($invoice->wc_order);
+				if($order){
+					$order->update_status( 'wc-completed', 'Pagamento identificado pelo webhook DigitalBanks');
+				}
+				return [
+					'status' => 'ok',
+					'message' => "Informação recebida"
+				];
+				break;
+			case 4:
+			case 5:
+			case 6:
+			case 7:
+				$invoice = $wpdb->get_row("SELECT * FROM {$invoice_table_name} WHERE invoice_id = '{$params->id}'");
+				if(!$invoice){
+					return [
+						'status' => 'error',
+						'message' => "Não foi possível encontrar o pedido para o invoice " . $invoice->id
+					];
+				}
+
+				$order = new WC_Order($invoice->wc_order);
+				if($order){
+					$order->update_status( 'wc-cancelled', 'Cancelamento identificado pelo webhook DigitalBanks');
+				}
+				return [
+					'status' => 'ok',
+					'message' => "Informação recebida"
+				];
+				break;
 		}
-		$post = implode('&', $post_arr);
 
-		curl_setopt_array($curl, array(
-			CURLOPT_URL => 'https://api.digitalbanks.com.br/api/public/invoice',
-			CURLOPT_RETURNTRANSFER => true,
-			CURLOPT_ENCODING => '',
-			CURLOPT_MAXREDIRS => 10,
-			CURLOPT_TIMEOUT => 0,
-			CURLOPT_FOLLOWLOCATION => true,
-			CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-			CURLOPT_CUSTOMREQUEST => 'POST',
-			CURLOPT_POSTFIELDS => $post,
-			CURLOPT_HTTPHEADER => array(
-				'Authorization: {{token_api_invoice}}',
-				'Content-Type: application/x-www-form-urlencoded'
-			),
-		));
-
-		//$response = curl_exec($curl);
-
-		curl_close($curl);
+		return [];
   }
-
-
 
 }
