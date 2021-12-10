@@ -19,7 +19,9 @@ class Boleto_Gateway extends WC_Payment_Gateway{
     $this->description  = $this->get_option( 'description' );
     $this->instructions = $this->get_option( 'instructions', $this->description );
     $this->token_api_invoice = $this->get_option( 'token_api_invoice' );
+    $this->discountLimitDateMonth = $this->get_option('discountLimitDateMonth');
     $this->invoice_table_name = $wpdb->prefix . "wc_digitalbanks_invoices";
+    $this->clientWebhook = $this->get_option( 'clientWebhook' );
     $this->has_fields = true;
 
     $this->config_form_fields();
@@ -49,6 +51,9 @@ class Boleto_Gateway extends WC_Payment_Gateway{
     global $wpdb;
     $invoice = $wpdb->get_row("SELECT * FROM {$this->invoice_table_name} WHERE wc_order = $order_id");
     if($invoice ){
+      if($order->has_status('on-hold')){
+        $order->update_status( 'wc-processing', 'Pedido em espera');
+      }
 
       if($order->has_status('processing')){
         $page .= "<h3>O pedido está aguardando pagamento</h3>";
@@ -67,7 +72,6 @@ class Boleto_Gateway extends WC_Payment_Gateway{
         }
         */
       }
-
 
     }else{
       $page = "<h3>Não foi possível encontrar o seu boleto.</h3>";
@@ -121,6 +125,13 @@ class Boleto_Gateway extends WC_Payment_Gateway{
         'default'     => __( $server_host . '/wp-json/wc-digitalbanks-boleto/v1/clientWebhook', 'wc-digitalbanks-boleto-gateway' ),
       ),
 
+      'discountLimitDateMonth' => array(
+        'title' => _('Pagamento Limite em Meses', 'wc-digitalbanks-boleto-gateway'),
+        'type'        => 'number',
+        'description' => __( 'Quantidade de meses para pagamento do boleto.', 'wc-digitalbanks-boleto-gateway' ),
+        'default'     => 1,
+      ),
+
       'instructions' => array(
         'title'       => __( 'Instruções', 'wc-digitalbanks-boleto-gateway' ),
         'type'        => 'textarea',
@@ -139,46 +150,75 @@ class Boleto_Gateway extends WC_Payment_Gateway{
       return NULL;
     }
 
-    $order_customer = new WC_Customer( $order->get_customer_id('view') );
-
-    $curl = curl_init();
     $params = [];
-    $params['value'] = $order->get_total();
-    $params['payerTaxId'] = '512.146.788-58';
-    $params['payerPostalCode'] = '13067-450';
-    $params['payerLocationNumber'] = '18';
-    $params['payerComplement'] = '';
-    $params['clientWebhook'] = 'http://localhost:8081/wp-json/get_boleto';
-    $params['dueDate'] = '2022-01-01';
+    $customer_id = $order->get_customer_id();
+    if($customer_id){
+      $order_customer = new WC_Customer( $customer_id );
 
-    $params['customIssuerName'] = 'PADARIA%20DO%20JOAO';
-    $params['customBodyText'] = 'Referente ao pedido ABC0000001234';
-    $params['payerNeighborhood'] = 'Boa Vista';
-    $params['payerStreet'] = 'Marcos Samartine';
-    $params['payerCity'] = 'Campinas';
-    $params['payerState'] = 'SP';
+      if($order_customer->get_meta('billing_cpf') && strlen($order_customer->get_meta('billing_cpf'))){
+        $params['payerTaxId'] = $order_customer->get_meta('billing_cpf');
+      }else if($order_customer->get_meta('billing_cnpj') && strlen($order_customer->get_meta('billing_cnpj'))){
+        $params['payerTaxId'] = $order_customer->get_meta('billing_cnpj');
+      }
+      $params['payerPostalCode'] = $order_customer->get_billing_postcode();
+      $params['payerLocationNumber'] = $order_customer->get_meta( 'billing_number' );
+      $params['customIssuerName'] = $order_customer->get_first_name() . ' ' . $order_customer->get_last_name();;
+      $params['payerNeighborhood'] = $order_customer->get_meta( 'billing_neighborhood' );
+      $params['payerStreet'] = $order_customer->get_billing_address_1();;
+      $params['payerCity'] = $order_customer->get_billing_city();
+      $params['payerState'] = $order_customer->get_billing_state();
+    }else{
+      if($order->get_meta('_billing_cpf') && strlen($order->get_meta('_billing_cpf'))){
+        $params['payerTaxId'] = $order->get_meta('_billing_cpf');
+      }else if($order->get_meta('_billing_cnpj') && strlen($order->get_meta('_billing_cnpj'))){
+        $params['payerTaxId'] = $order->get_meta('_billing_cnpj');
+      }
+
+      $params['payerPostalCode'] = $order->get_billing_postcode();
+      $params['payerLocationNumber'] = $order->get_meta( '_billing_number' );
+      $params['customIssuerName'] = $order->get_billing_first_name() . ' ' . $order->get_billing_last_name();;
+      $params['payerNeighborhood'] = $order->get_meta( '_billing_neighborhood' );
+      $params['payerStreet'] = $order->get_billing_address_1();;
+      $params['payerCity'] = $order->get_billing_city();
+      $params['payerState'] = $order->get_billing_state();
+    }
+
+    $params['payerComplement'] = '';
+    $params['clientWebhook'] = $this->clientWebhook;
+    $params['dueDate'] = $order->get_discount_total();
+    $params['customBodyText'] = 'Referente ao pedido WC : ' . $order_id;
+    $params['value'] = $order->get_total();
+
+
 
     $params['discountType'] = 3;
-    $params['discountLimitDate'] = '2022-01-01';
-    $params['discountPercentAmount'] = '0';
-    $params['discountAmount'] = 0.10;
-    $params['discountFixedAmount'] = 0.25;
+    $time = strtotime(date("Y-m-d"));
+    $final = date("Y-m-d", strtotime("+".$this->discountLimitDateMonth." month", $time));
+    $params['discountLimitDate'] = $final;
+    //$params['discountPercentAmount'] = 0;
+    $params['discountAmount'] = $order->get_discount_total();
+    $params['discountFixedAmount'] = $order->get_discount_total();
+    /*
     $params['interestType'] = 1;
     $params['interestPercent'] = 0;
     $params['interestAmount'] = 2;
-    $params['fineType'] = 2;
-    $params['finePercent'] = 3.10;
+    $params['fineType'] = 1;
+    $params['finePercent'] = 0;
     $params['fineAmount'] = 0;
     $params['fineDate'] = '2021-08-09';
+    */
 
     $post_arr = [];
     foreach ($params as $key => $value) {
       $post_arr[] = "$key=$value";
     }
     $post = implode('&', $post_arr);
+    //echo $post;
+    //die();
 
+    $curl = curl_init();
     curl_setopt_array($curl, array(
-      CURLOPT_URL => 'https://api.digitalbanks.com.br/api/public/invoice',
+      CURLOPT_URL => 'https://api.digitalbanks.com.br/api/public/v2/invoice',
       CURLOPT_RETURNTRANSFER => true,
       CURLOPT_ENCODING => '',
       CURLOPT_MAXREDIRS => 10,
@@ -192,25 +232,36 @@ class Boleto_Gateway extends WC_Payment_Gateway{
         'Content-Type: application/x-www-form-urlencoded'
       ),
     ));
-    //string(790) "{"id":"ba5d7e2e-1ef1-44a9-a90d-76137ef59da0","type":1,"recurrent":false,"value":10.0,"details":{"id":"793a2ced-872b-4e6d-ab6d-933191355db1","document_number":"003791082","barcode":"34192885200000010001090037910828848273473000","typing_line":"34191090083791082884982734730003288520000001000","url":"https://api.digitalbankstecnologia.com.br/api/public/print/boleto?boleto=ba5d7e2e-1ef1-44a9-a90d-76137ef59da0"},"status":1,"statusReadable":"PROCESSED","boleto":{"id":null,"customIssuerInvoiceIdentifier":null,"paidAt":null},"dueDate":"2022-01-01","clientWebhook":"http://localhost:8081/wp-json/get_boleto","createdAt":"2021-12-09T21:52:42.107268Z","updatedAt":"2021-12-09T21:52:42.112602Z","clientServerResponseStatus":null,"clientServerResponses":null,"clientWebhookNotificationsAttempts":0}"
 
     $response = curl_exec($curl);
-    $response_obj = json_decode($response);
-
-    $wpdb->insert($this->invoice_table_name, [
-      'invoice_id' => $response_obj->id,
-      'document_number' => $response_obj->details->document_number,
-      'barcode' => $response_obj->details->barcode,
-      'url' => $response_obj->details->url,
-      'wc_order' => $order_id,
-      'status' => $response_obj->status,
-      'response' => $response
-    ]);
-
-    if($response_obj->status != 1){
-      wc_add_notice( 'Erro no pagamento: ' . implode('<br>', $response_obj->errors), 'error' );
+    if(!$response){
+      wc_add_notice( 'Algo deu errado. Tente novamente mais tarde');
       return NULL;
     }
+    $response_obj = json_decode($response);
+    if(!$response_obj){
+      wc_add_notice( 'Algo deu errado. Tente novamente mais tarde');
+      return NULL;
+    }
+    if($response_obj->has_errors != false){
+      wc_add_notice( "Erro no Gateway de pagamento " . $response_obj->message );
+      foreach ($response_obj->errors as $key => $value) {
+        wc_add_notice( $response_obj->description );
+      }
+      return NULL;
+    }
+
+    $result = $response_obj->result;
+
+    $wpdb->insert($this->invoice_table_name, [
+      'invoice_id' => $result->id,
+      'document_number' => $result->details->document_number,
+      'barcode' => $result->details->barcode,
+      'url' => $result->details->url,
+      'wc_order' => $order_id,
+      'status' => $result->status,
+      'response' => $response
+    ]);
 
     $order->payment_complete();
     $order->update_status( 'on-hold', 'Pedido em espera');
