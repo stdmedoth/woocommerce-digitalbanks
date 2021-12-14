@@ -151,6 +151,10 @@ class Boleto_Gateway extends WC_Payment_Gateway{
     }
 
     $params = [];
+    $date_time = strtotime(date("Y-m-d"));
+    $discountLimitDateMonth = date("Y-m-d", strtotime("+".$this->discountLimitDateMonth." month", $date_time));;
+
+    $params['value'] = $order->get_total();
     $customer_id = $order->get_customer_id();
     if($customer_id){
       $order_customer = new WC_Customer( $customer_id );
@@ -183,21 +187,21 @@ class Boleto_Gateway extends WC_Payment_Gateway{
       $params['payerState'] = $order->get_billing_state();
     }
 
-    $params['payerComplement'] = '';
+    $params['payerComplement'] = 'Teste';
     $params['clientWebhook'] = $this->clientWebhook;
-    $params['dueDate'] = $order->get_discount_total();
+
+    $this->dueDate = 1;
+    $dueDate = date("Y-m-d", strtotime("+".$this->dueDate." month", $date_time));
+    $params['dueDate'] = $dueDate;
+
     $params['customBodyText'] = 'Referente ao pedido WC : ' . $order_id;
-    $params['value'] = $order->get_total();
 
+    //$params['discountType'] = 3;
 
-
-    $params['discountType'] = 3;
-    $time = strtotime(date("Y-m-d"));
-    $final = date("Y-m-d", strtotime("+".$this->discountLimitDateMonth." month", $time));
-    $params['discountLimitDate'] = $final;
+    //$params['discountLimitDate'] = $discountLimitDateMonth;
     //$params['discountPercentAmount'] = 0;
-    $params['discountAmount'] = $order->get_discount_total();
-    $params['discountFixedAmount'] = $order->get_discount_total();
+    //$params['discountAmount'] = $order->get_discount_total();
+    //$params['discountFixedAmount'] = $order->get_discount_total();
     /*
     $params['interestType'] = 1;
     $params['interestPercent'] = 0;
@@ -212,7 +216,8 @@ class Boleto_Gateway extends WC_Payment_Gateway{
     foreach ($params as $key => $value) {
       $post_arr[] = "$key=$value";
     }
-    $post = implode('&', $post_arr);
+    $post = urlencode(implode('&', $post_arr));
+    //$post = implode('&', $post_arr);
     //echo $post;
     //die();
 
@@ -226,27 +231,31 @@ class Boleto_Gateway extends WC_Payment_Gateway{
       CURLOPT_FOLLOWLOCATION => true,
       CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
       CURLOPT_CUSTOMREQUEST => 'POST',
+      CURLOPT_POST =>  1,
       CURLOPT_POSTFIELDS => $post,
       CURLOPT_HTTPHEADER => array(
         'Authorization: '.$this->token_api_invoice,
-        'Content-Type: application/x-www-form-urlencoded'
+        'Content-Type: application/x-www-form-urlencoded',
+        'Accept-Language: pt-BR'
       ),
     ));
 
     $response = curl_exec($curl);
     if(!$response){
-      wc_add_notice( 'Algo deu errado. Tente novamente mais tarde');
+      wc_add_notice( 'Algo deu errado. Tente novamente mais tarde', 'error');
       return NULL;
     }
     $response_obj = json_decode($response);
     if(!$response_obj){
-      wc_add_notice( 'Algo deu errado. Tente novamente mais tarde');
+      wc_add_notice( 'Algo deu errado. Tente novamente mais tarde', 'error');
       return NULL;
     }
     if($response_obj->has_errors != false){
-      wc_add_notice( "Erro no Gateway de pagamento " . $response_obj->message );
+      wc_add_notice( $response_obj->message, 'error' );
+      //var_dump($response_obj);
+      //die();
       foreach ($response_obj->errors as $key => $value) {
-        wc_add_notice( $response_obj->description );
+        wc_add_notice( $value->description, 'error' );
       }
       return NULL;
     }
